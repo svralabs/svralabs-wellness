@@ -6,11 +6,16 @@ on:
   workflow_dispatch:
 
 jobs:
-  route_and_deploy:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
       - name: Parse deploy.json
         id: config
@@ -19,13 +24,10 @@ jobs:
             TARGET=$(jq -r '.target // "vps"' deploy.json)
             PROJECT_NAME=$(jq -r '.project_name // empty' deploy.json)
             OUTPUT_DIR=$(jq -r '.output_dir // "dist"' deploy.json)
-            FRAMEWORK=$(jq -r '.framework // empty' deploy.json)
           else
-            echo "Warning: deploy.json not found, falling back to vps default."
             TARGET="vps"
             PROJECT_NAME=""
             OUTPUT_DIR="dist"
-            FRAMEWORK=""
           fi
           
           if [ -z "$PROJECT_NAME" ]; then
@@ -35,46 +37,36 @@ jobs:
           echo "target=$TARGET" >> $GITHUB_OUTPUT
           echo "project_name=$PROJECT_NAME" >> $GITHUB_OUTPUT
           echo "output_dir=$OUTPUT_DIR" >> $GITHUB_OUTPUT
-          echo "framework=$FRAMEWORK" >> $GITHUB_OUTPUT
           echo "Target detected: $TARGET"
           echo "Project Name: $PROJECT_NAME"
 
       # -----------------------------------------------------------
-      # 1. DEPLOY TO VERCEL
+      # 1. DEPLOY TO CLOUDFLARE PAGES
       # -----------------------------------------------------------
-      - name: Deploy to Vercel
-        if: steps.config.outputs.target == 'vercel'
-        uses: amondnet/vercel-action@v25
-        with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-args: '--prod'
-          scope: ${{ secrets.VERCEL_ORG_ID }}
-
-      # -----------------------------------------------------------
-      # 2. DEPLOY TO CLOUDFLARE PAGES
-      # -----------------------------------------------------------
-      - name: Setup Node.js (for Cloudflare Pages build)
+      - name: Build & Deploy to Cloudflare Pages
         if: steps.config.outputs.target == 'cloudflare'
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Build Project (for Cloudflare Pages)
-        if: steps.config.outputs.target == 'cloudflare'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           if [ -f "package.json" ]; then
             npm ci || npm install
             npm run build || true
           fi
+          npx wrangler pages project create "${{ steps.config.outputs.project_name }}" --production-branch=main || true
+          npx wrangler pages deploy "${{ steps.config.outputs.output_dir }}" --project-name="${{ steps.config.outputs.project_name }}" --branch=main
 
-      - name: Deploy to Cloudflare Pages
-        if: steps.config.outputs.target == 'cloudflare'
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy ${{ steps.config.outputs.output_dir }} --project-name=${{ steps.config.outputs.project_name }} --branch=main
+      # -----------------------------------------------------------
+      # 2. DEPLOY TO VERCEL
+      # -----------------------------------------------------------
+      - name: Build & Deploy to Vercel
+        if: steps.config.outputs.target == 'vercel'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+        run: |
+          npm install -g vercel
+          vercel deploy --prod --token="$VERCEL_TOKEN" --scope="$VERCEL_ORG_ID" --yes
 
       # -----------------------------------------------------------
       # 3. DEPLOY TO VPS (COOLIFY)
