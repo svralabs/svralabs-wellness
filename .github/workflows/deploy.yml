@@ -1,0 +1,80 @@
+name: Dynamic Multi-Target Deployment
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  route_and_deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Parse deploy.json
+        id: config
+        run: |
+          if [ -f "deploy.json" ]; then
+            TARGET=$(jq -r '.target // "vps"' deploy.json)
+            PROJECT_NAME=$(jq -r '.project_name // ""' deploy.json)
+            OUTPUT_DIR=$(jq -r '.output_dir // "dist"' deploy.json)
+            FRAMEWORK=$(jq -r '.framework // ""' deploy.json)
+          else
+            echo "Warning: deploy.json not found, falling back to vps default."
+            TARGET="vps"
+            PROJECT_NAME=""
+            OUTPUT_DIR="dist"
+            FRAMEWORK=""
+          fi
+          echo "target=$TARGET" >> $GITHUB_OUTPUT
+          echo "project_name=$PROJECT_NAME" >> $GITHUB_OUTPUT
+          echo "output_dir=$OUTPUT_DIR" >> $GITHUB_OUTPUT
+          echo "framework=$FRAMEWORK" >> $GITHUB_OUTPUT
+          echo "Target detected: $TARGET"
+
+      # -----------------------------------------------------------
+      # 1. DEPLOY TO VERCEL
+      # -----------------------------------------------------------
+      - name: Deploy to Vercel
+        if: steps.config.outputs.target == 'vercel'
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-args: '--prod'
+          scope: ${{ secrets.VERCEL_ORG_ID }}
+
+      # -----------------------------------------------------------
+      # 2. DEPLOY TO CLOUDFLARE PAGES
+      # -----------------------------------------------------------
+      - name: Setup Node.js (for Cloudflare Pages build)
+        if: steps.config.outputs.target == 'cloudflare'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build Project (for Cloudflare Pages)
+        if: steps.config.outputs.target == 'cloudflare'
+        run: |
+          if [ -f "package.json" ]; then
+            npm ci || npm install
+            npm run build || true
+          fi
+
+      - name: Deploy to Cloudflare Pages
+        if: steps.config.outputs.target == 'cloudflare'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy ${{ steps.config.outputs.output_dir }} --project-name=${{ steps.config.outputs.project_name || github.event.repository.name }} --branch=main
+
+      # -----------------------------------------------------------
+      # 3. DEPLOY TO VPS (COOLIFY)
+      # -----------------------------------------------------------
+      - name: Trigger Coolify Webhook
+        if: steps.config.outputs.target == 'vps' && secrets.COOLIFY_WEBHOOK_URL != ''
+        run: |
+          echo "Triggering Coolify deployment..."
+          curl -X POST "${{ secrets.COOLIFY_WEBHOOK_URL }}"
