@@ -17,9 +17,9 @@ jobs:
         run: |
           if [ -f "deploy.json" ]; then
             TARGET=$(jq -r '.target // "vps"' deploy.json)
-            PROJECT_NAME=$(jq -r '.project_name // ""' deploy.json)
+            PROJECT_NAME=$(jq -r '.project_name // empty' deploy.json)
             OUTPUT_DIR=$(jq -r '.output_dir // "dist"' deploy.json)
-            FRAMEWORK=$(jq -r '.framework // ""' deploy.json)
+            FRAMEWORK=$(jq -r '.framework // empty' deploy.json)
           else
             echo "Warning: deploy.json not found, falling back to vps default."
             TARGET="vps"
@@ -27,11 +27,17 @@ jobs:
             OUTPUT_DIR="dist"
             FRAMEWORK=""
           fi
+          
+          if [ -z "$PROJECT_NAME" ]; then
+            PROJECT_NAME="${{ github.event.repository.name }}"
+          fi
+
           echo "target=$TARGET" >> $GITHUB_OUTPUT
           echo "project_name=$PROJECT_NAME" >> $GITHUB_OUTPUT
           echo "output_dir=$OUTPUT_DIR" >> $GITHUB_OUTPUT
           echo "framework=$FRAMEWORK" >> $GITHUB_OUTPUT
           echo "Target detected: $TARGET"
+          echo "Project Name: $PROJECT_NAME"
 
       # -----------------------------------------------------------
       # 1. DEPLOY TO VERCEL
@@ -68,7 +74,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy ${{ steps.config.outputs.output_dir }} --project-name=${{ steps.config.outputs.project_name || github.event.repository.name }} --branch=main
+          command: pages deploy ${{ steps.config.outputs.output_dir }} --project-name=${{ steps.config.outputs.project_name }} --branch=main
 
       # -----------------------------------------------------------
       # 3. DEPLOY TO VPS (COOLIFY)
